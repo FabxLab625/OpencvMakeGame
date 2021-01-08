@@ -1,0 +1,224 @@
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui.hpp>
+#include <iostream>
+using namespace cv;
+using namespace std;
+
+Mat resulyImage;
+#define ERROR 1234
+double fscale = 0.1;
+Size outsize;
+vector<vector<Point> >::iterator itr;
+//度数转换
+double DegreeTrans(double theta)
+{
+	double res = theta / CV_PI * 180;
+	return res;
+}
+
+//逆时针旋转图像degree角度（原尺寸）    
+void rotateImage(Mat src, Mat& img_rotate, double degree)
+{
+	//旋转中心为图像中心    
+	Point2f center;
+	center.x = float(src.cols / 2.0);
+	center.y = float(src.rows / 2.0);
+	int length = 0;
+	length = sqrt(src.cols*src.cols + src.rows*src.rows);
+	//计算二维旋转的仿射变换矩阵  
+	Mat M = getRotationMatrix2D(center, degree, 1);
+	warpAffine(src, img_rotate, M, Size(length, length), 1, 0, Scalar(255, 255, 255));//仿射变换，背景色填充为白色  
+}
+
+//通过霍夫变换计算角度
+double CalcDegree(const Mat &srcImage, Mat &dst)
+{
+	Mat midImage, dstImage;
+
+	Canny(srcImage, midImage, 50, 200, 3);
+	cvtColor(midImage, dstImage, COLOR_GRAY2BGR);
+
+	//通过霍夫变换检测直线
+	vector<Vec2f> lines;
+	HoughLines(midImage, lines, 1, CV_PI / 180, 200, 0, 0);//第5个参数就是阈值，阈值越大，检测精度越高,由于图像不同，阈值不好设定，因为阈值设定过高导致无法检测直线，阈值过低直线太多，速度很慢
+														   //所以根据阈值由大到小设置了三个阈值，如果经过大量试验后，可以固定一个适合的阈值。
+	if (!lines.size())
+	{
+		HoughLines(midImage, lines, 1, CV_PI / 210, 150, 0, 0);
+	}
+	if (!lines.size())
+	{
+		HoughLines(midImage, lines, 1, CV_PI / 180, 100, 0, 0);
+	}
+	if (!lines.size())
+	{
+		cout << "没有检测到直线！" << endl;
+		return ERROR;
+	}
+
+	float sum = 0;
+	//依次画出每条线段
+	for (size_t i = 0; i < lines.size(); i++)
+	{
+		float rho = lines[i][0];
+		float theta = lines[i][1];
+		Point pt1, pt2;
+		double a = cos(theta), b = sin(theta);
+		double x0 = a*rho, y0 = b*rho;
+		pt1.x = cvRound(x0 + 1000 * (-b));
+		pt1.y = cvRound(y0 + 1000 * (a));
+		pt2.x = cvRound(x0 - 1000 * (-b));
+		pt2.y = cvRound(y0 - 1000 * (a));
+		sum += theta;
+		line(dstImage, pt1, pt2, Scalar(55, 100, 195), 1, LINE_AA); //Scalar函数用于调节线段颜色
+																	//imshow("直线探测效果图", dstImage);
+	}
+	float average = sum / lines.size(); //对所有角度求平均，这样做旋转效果会更好
+	cout << "average theta:" << average << endl;
+	double angle = DegreeTrans(average) - 90;
+	rotateImage(dstImage, dst, angle);
+	//imshow("直线探测效果图2", dstImage);
+	return angle;
+}
+
+//转换全局变量；
+Mat transform(Mat input)
+{
+	Mat inimage = input;
+	/*	Mat ddddinmge;
+	blur(inimage, ddddinmge, Size(5, 5));*/
+	return inimage;
+}
+
+//图片倾斜矫正
+void ImageRecify(Mat& input)
+{
+	double degree;
+	Mat src = input;
+	imshow("原始图", src);
+	Mat dst;
+	//倾斜角度矫正
+	degree = CalcDegree(src, dst);
+	if (degree == ERROR)
+	{
+		cout << "矫正失败！" << endl;
+		return;
+	}
+	rotateImage(src, dst, degree);
+	cout << "angle:" << degree << endl;
+	//imshow("旋转调整后", dst);
+	resulyImage = dst(Rect(0, 0, dst.cols, 200));
+	Mat dsage = transform(resulyImage);
+	//resulyImage = dst(Rect(0, 0, dst.cols, 200)); //根据先验知识，估计好文本的长宽，再裁剪下来
+	//imwrite("D:/picture/1.jpg", resulyImage);//表示需要写入的文件名，必须要加上后缀，比如“123.png”，或带文件路径的图像名称.resulyImage表示Mat类型的图像数据。
+	//return resulyImage;
+}
+
+//图片切割
+void CutImage(Mat &input)
+{
+	Mat img = input;
+	Mat ilated;
+	outsize.width = img.cols*fscale;
+	outsize.height = img.rows*fscale;
+	resize(img, ilated, outsize, 0, 0, INTER_AREA);
+	//imshow("原图", ilated);
+	ImageRecify(ilated);
+	Mat qgimage = transform(resulyImage);
+	//imshow("缩小原图", qgimage);
+	//	imwrite("D:/picture/2.jpg", qgimage);
+
+	Mat img_gray1;
+	cvtColor(qgimage, img_gray1, COLOR_BGR2GRAY);
+
+	Mat img_gray0;
+	//GaussianBlur(qgimage, img_gray0, Size(1, 1),0,0);
+	blur(img_gray1, img_gray0, Size(1, 1));
+	imshow("平滑原图", img_gray0);
+
+	Mat kernel = getStructuringElement(MORPH_RECT, Size(2, 2));
+	Mat img_gray;
+	erode(img_gray0, img_gray, kernel);
+	imshow("腐蚀图像", img_gray);
+
+	/*Mat img_gray;
+	Mat kernel = getStructuringElement(MORPH_RECT, Size(3,1));  //MORPH_CROSS   //使用3*3交叉内核
+	dilate(img_gray0, img_gray, kernel, Point(-1, -1),3);   //以这个内核为中心膨胀8倍
+	imshow("膨胀效果图", img_gray);*/
+
+	/*Mat img_gray2;
+	adaptiveThreshold(img_gray, img_gray2, 255, ADAPTIVE_THRESH_MEAN_C, THRESH_BINARY, 5,5);
+	imshow("二值化图", img_gray2);              //ADAPTIVE_THRESH_GAUSSIAN_C,ADAPTIVE_THRESH_MEAN_C*/
+
+	Mat img_gray2;
+	threshold(img_gray, img_gray2, 75, 255, THRESH_TOZERO);
+	//threshold(img_gray1, img_gray2, 100, 255, THRESH_BINARY);
+	//threshold(img_gray1, img_gray2, 100, 255, THRESH_BINARY_INV);
+	//threshold(img_gray1, img_gray2, 100, 255, THRESH_TRUNC);
+	//threshold(img_gray1, img_gray2, 100, 255, THRESH_TOZERO_INV);
+	imshow("二值化图", img_gray2);
+
+
+	Mat img_canny;
+	Canny(img_gray2, img_canny, 150, 85);//200, 100
+	imshow("轮廓", img_canny);
+	vector<vector<cv::Point> > contours;
+	vector<Vec4i> hierarchy;
+	findContours(img_canny, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_NONE, Point());
+
+	char img_name_arr[255];
+	for (int i = 1; i < contours.size(); i++)
+	{
+		Rect rect = boundingRect(Mat(contours[i]));
+		if (rect.height < 20 || rect.width < 15 || rect.width / rect.height>1)
+		{
+
+			continue;
+		}
+		rectangle(qgimage, rect.tl(), rect.br(), Scalar(255, 0, 0));
+		Mat roi = qgimage(rect);
+
+		sprintf_s(img_name_arr, "%d.jpg", i);
+		cv::imwrite(img_name_arr, roi);
+	}
+
+
+}
+
+int main()
+{
+
+	string path = "D:/picture";//此处替换为自己的图片序列
+	string write_path = "D:/picture";
+	vector<String> src_name;
+	glob(path, src_name, false);//调用opncv中的glob函数，将遍历路径path，将该路径下的全部文件名的绝对路径存进src_name,如/home/chuyi/xingqiu/homework/homework1/rgb/001.png
+	if (src_name.size() == 0)
+	{
+		cerr << "无图像 " << path << endl;
+		exit(1);
+	}
+	for (int i = 0; i < src_name.size(); ++i) {
+		Mat image = imread(src_name[i]);
+		if (image.empty())
+		{
+			cerr << "读取图像 " << src_name[i] << " 失败!";
+			exit(1);
+		}
+		//imshow("test", image);
+		//waitKey(0);
+		string new_name = write_path + format("/%04d", i) + ".jpg";//控制输出为4位整数并在前面补0
+																   //cout << new_name <<endl;
+		imwrite(new_name, image);
+		/*if (remove(src_name[i].c_str()))//删除源图片
+		{
+			cerr << "删除 " << src_name[i] << " 失败" << endl;
+		}*/
+		cout << "重命名 " << src_name[i] << " to " << new_name << endl;
+		CutImage(image);
+	}
+	cout << "Totally rename " << src_name.size() << " pictures!" << endl;
+	return 0;
+
+	waitKey(0);
+	return 0;
+}
